@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cellular Noise</title>
+<style>
+html,body,canvas{
+    margin:0;
+    width:100%;
+    height:100%;
+    display:block;
+    overflow:hidden;
+    background:#000;
+}
+</style>
+</head>
+<body>
+<canvas id="glcanvas"></canvas>
+
+<script>
+const SCALE = 8.0;   // cell density
+const SPEED = 1.0;   // animation speed
+</script>
+
+<script id="vertShaderSrc" type="x-shader/x-vertex">#version 300 es
+in vec2 a_position;
+void main(){ gl_Position = vec4(a_position,0.0,1.0); }
+</script>
+
+<script id="fragShaderSrc" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+
+// JavaScript側から渡される値
+uniform vec2  u_resolution; // 画面サイズ(px)
+uniform float u_time;       // 経過時間(秒)
+uniform float u_scale;      // セルの細かさ
+uniform float u_speed;      // アニメーション速度
+
+out vec4 outColor;
+
+// セル座標から再現性のある疑似乱数を生成するハッシュ関数
+vec2 hash2(vec2 p){
+    p = vec2(
+        dot(p, vec2(127.1,311.7)),
+        dot(p, vec2(269.5,183.3))
+    );
+
+    return fract(sin(p) * 43758.5453123);
+}
+
+void main(){
+    // ピクセル座標 → 0～1のUV座標
+    vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+
+    // アスペクト比補正
+    uv.x *= u_resolution.x / u_resolution.y;
+
+    // セル空間へ変換
+    vec2 st = uv * u_scale;
+
+    // セル番号（整数部分）
+    vec2 i_st = floor(st);
+
+    // セル内の位置（0～1）
+    vec2 f_st = fract(st);
+
+    // 現在見つかっている最短距離
+    float minDist = 8.0;
+
+    // 周囲3×3セルを探索
+    for(int y=-1; y<=1; y++){
+        for(int x=-1; x<=1; x++){
+            vec2 neighbor = vec2(float(x), float(y));
+
+            // セルごとの特徴点を生成
+            vec2 point = hash2(i_st + neighbor);
+
+            // 特徴点をゆっくり動かす
+            point = 0.5 + 0.5 * sin( u_time * u_speed + 6.2831 * point );
+
+            // 現在ピクセルから特徴点までのベクトル
+            vec2 diff = neighbor + point - f_st;
+
+            // 距離
+            float dist = length(diff);
+
+            // 最短距離を更新
+            minDist = min(minDist, dist);
+        }
+    }
+
+    // 距離をそのままグレースケール表示
+    outColor = vec4(vec3(minDist), 1.0);
+}
+</script>
+
+<script>
+const canvas = document.getElementById('glcanvas');
+const gl = canvas.getContext('webgl2');
+
+function shader(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+        throw new Error(gl.getShaderInfoLog(s));
+    }
+    return s;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, shader(gl.VERTEX_SHADER, document.getElementById('vertShaderSrc').textContent));
+gl.attachShader(program, shader(gl.FRAGMENT_SHADER, document.getElementById('fragShaderSrc').textContent));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+const loc = gl.getAttribLocation(program, 'a_position');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+const uResolution = gl.getUniformLocation(program, 'u_resolution');
+const uTime = gl.getUniformLocation(program, 'u_time');
+const uScale = gl.getUniformLocation(program, 'u_scale');
+const uSpeed = gl.getUniformLocation(program, 'u_speed');
+
+function resize(){
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = innerWidth * dpr;
+    canvas.height = innerHeight * dpr;
+    gl.viewport(0,0,canvas.width,canvas.height);
+}
+
+addEventListener('resize', resize);
+resize();
+
+const start = performance.now();
+
+function render(){
+    const t = (performance.now() - start) * 0.001;
+
+    gl.uniform2f(uResolution, canvas.width, canvas.height);
+    gl.uniform1f(uTime, t);
+    gl.uniform1f(uScale, SCALE);
+    gl.uniform1f(uSpeed, SPEED);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(render);
+}
+
+render();
+</script>
+</body>
+</html>
